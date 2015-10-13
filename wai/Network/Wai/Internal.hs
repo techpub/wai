@@ -12,7 +12,7 @@ import           Blaze.ByteString.Builder     (Builder)
 import           Control.Exception            (IOException, try)
 import qualified Data.ByteString              as B hiding (pack)
 import qualified Data.ByteString.Builder as B
-import qualified Data.ByteString.Char8        as B (pack, readInteger)
+import qualified Data.ByteString.Char8        as B (pack)
 import qualified Data.ByteString.Lazy as L
 #if __GLASGOW_HASKELL__ < 709
 import           Data.Functor                 ((<$>))
@@ -23,7 +23,6 @@ import           Data.Typeable                (Typeable)
 import           Data.Vault.Lazy              (Vault)
 import           Data.Word                    (Word64)
 import qualified Network.HTTP.Types           as H
-import qualified Network.HTTP.Types.Header as HH
 import           Network.Socket               (SockAddr)
 import           Numeric                      (showInt)
 import           Data.List                    (intercalate)
@@ -191,7 +190,7 @@ contentRangeHeader beg end total = (hContentRange, range)
 -- serving the whole file if it's absent or malformed.
 chooseFilePart :: Integer -> Maybe B.ByteString -> FilePart
 chooseFilePart size Nothing      = FilePart 0 size size
-chooseFilePart size (Just range) = case parseByteRanges range >>= listToMaybe of
+chooseFilePart size (Just range) = case H.parseByteRanges range >>= listToMaybe of
     -- Range is broken
     Nothing -> FilePart 0 size size
     Just hrange -> checkRange hrange
@@ -218,30 +217,3 @@ adjustForFilePart s h part = (s', h'')
     s' = if filePartByteCount part /= size then H.partialContent206 else s
     h' = (H.hContentLength, lengthBS):(hAcceptRanges, "bytes"):h
     h'' = (if len == size then id else (contentRange:)) h'
-
--- | Parse the value of a Range header into a 'HH.ByteRanges'.
-parseByteRanges :: B.ByteString -> Maybe HH.ByteRanges
-parseByteRanges bs1 = do
-    bs2 <- stripPrefix "bytes=" bs1
-    (r, bs3) <- range bs2
-    ranges (r:) bs3
-  where
-    range bs2 = do
-        (i, bs3) <- B.readInteger bs2
-        if i < 0 -- has prefix "-" ("-0" is not valid, but here treated as "0-")
-            then Just (HH.ByteRangeSuffix (negate i), bs3)
-            else do
-                bs4 <- stripPrefix "-" bs3
-                case B.readInteger bs4 of
-                    Just (j, bs5) | j >= i -> Just (HH.ByteRangeFromTo i j, bs5)
-                    _ -> Just (HH.ByteRangeFrom i, bs4)
-    ranges front bs3
-        | B.null bs3 = Just (front [])
-        | otherwise = do
-            bs4 <- stripPrefix "," bs3
-            (r, bs5) <- range bs4
-            ranges (front . (r:)) bs5
-
-    stripPrefix x y
-        | x `B.isPrefixOf` y = Just (B.drop (B.length x) y)
-        | otherwise = Nothing
